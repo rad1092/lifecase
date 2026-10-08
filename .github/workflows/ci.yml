@@ -94,7 +94,11 @@ jobs:
           go test -count=1 -timeout=120s ./...
           go test -race -count=1 -timeout=180s ./...
           go vet ./...
-          test -z "$(gofmt -l cmd kit runner)"
+          unformatted=$(gofmt -l cmd kit runner)
+          if [ -n "$unformatted" ]; then
+            printf '%s\n' "$unformatted"
+            exit 1
+          fi
       - name: Install and smoke test Go verifier binary
         run: |
           mkdir -p build/cli reports
