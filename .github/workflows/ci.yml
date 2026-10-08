@@ -1,0 +1,192 @@
+name: lifecycle-contracts
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: lifecycle-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  source:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - run: python3 scripts/check-source.py
+
+  contracts:
+    name: contracts (${{ matrix.target }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            target: linux-x64
+            compiler: g++
+            suffix: ''
+          - os: macos-15
+            target: macos-arm64
+            compiler: clang++
+            suffix: ''
+          - os: windows-2022
+            target: windows-x64
+            compiler: cl
+            suffix: .exe
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    defaults:
+      run:
+        shell: bash
+    env:
+      LIFECYCLE_TARGET: ${{ matrix.target }}
+      FIXTURE_SUFFIX: ${{ matrix.suffix }}
+      DOTNET_NOLOGO: 'true'
+      DOTNET_CLI_TELEMETRY_OPTOUT: 'true'
+      CGO_ENABLED: '1'
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version: 1.26.x
+          cache: false
+      - uses: actions/setup-dotnet@26b0ec14cb23fa6904739307f278c14f94c95bf1 # v5
+        with:
+          dotnet-version: 8.0.x
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.12'
+      - name: Configure Unix native fixture
+        if: runner.os != 'Windows'
+        run: cmake -S . -B build/native -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_COMPILER=${{ matrix.compiler }}
+      - name: Configure Windows native fixture
+        if: runner.os == 'Windows'
+        run: cmake -S . -B build/native -A x64
+      - name: Build and install native fixture
+        run: |
+          cmake --build build/native --config Release --parallel 2
+          cmake --install build/native --config Release --prefix build/install
+      - name: Export installed fixture path
+        run: |
+          python - <<'PY'
+          import os
+          from pathlib import Path
+          fixture = Path('build/install/bin/lifecase-fixture' + os.environ['FIXTURE_SUFFIX']).resolve()
+          with open(os.environ['GITHUB_ENV'], 'a', encoding='utf-8') as env:
+              env.write('LIFECASE_FIXTURE=' + str(fixture) + '\n')
+              env.write('GOBIN=' + str(Path('build/cli').resolve()) + '\n')
+          PY
+      - name: Repeat native fixture contracts
+        run: |
+          python fixture/tests.py "$LIFECASE_FIXTURE"
+          python fixture/tests.py "$LIFECASE_FIXTURE"
+      - name: Go tests and static checks
+        run: |
+          go test -count=1 -timeout=120s ./...
+          go test -race -count=1 -timeout=180s ./...
+          go vet ./...
+          test -z "$(gofmt -l cmd kit runner)"
+      - name: Install and smoke test Go verifier binary
+        run: |
+          mkdir -p build/cli reports
+          go install ./cmd/lifecase
+          "build/cli/lifecase${FIXTURE_SUFFIX}" version
+          "build/cli/lifecase${FIXTURE_SUFFIX}" run --fixture "$LIFECASE_FIXTURE" --json reports/contracts.json --junit reports/contracts.xml
+          "build/cli/lifecase${FIXTURE_SUFFIX}" run --fixture "$LIFECASE_FIXTURE" --json reports/contracts-repeat.json --junit reports/contracts-repeat.xml
+      - name: Restore locked official CliWrap test dependencies
+        run: dotnet restore dotnet/tests/Lifecase.CliWrap.Tests --locked-mode -p:NuGetAudit=true -p:NuGetAuditMode=all
+      - name: Build official CliWrap regression tests
+        run: dotnet build dotnet/tests/Lifecase.CliWrap.Tests -c Release --no-restore
+      - name: Run official CliWrap regression tests
+        run: dotnet test dotnet/tests/Lifecase.CliWrap.Tests -c Release --no-build --logger "trx;LogFileName=cliwrap.trx" --results-directory "$PWD/reports"
+      - name: Package the installed fixture
+        run: |
+          python - <<'PY'
+          import hashlib
+          import json
+          import os
+          from pathlib import Path
+          import platform
+          import re
+          import zipfile
+
+          target = os.environ['LIFECYCLE_TARGET']
+          machine = platform.machine().lower()
+          expected = {'linux-x64': ('x86_64', 'amd64'), 'macos-arm64': ('arm64', 'aarch64'), 'windows-x64': ('amd64', 'x86_64')}
+          assert machine in expected[target], (target, machine)
+          destination = Path('build/packages')
+          destination.mkdir(parents=True, exist_ok=True)
+          fixture = Path(os.environ['LIFECASE_FIXTURE'])
+          files = [(fixture, fixture.name), (Path('LICENSE'), 'LICENSE'), (Path('docs/protocol-v1.md'), 'protocol-v1.md')]
+          version = re.search(r'project\(lifecase VERSION ([0-9.]+)', Path('CMakeLists.txt').read_text()).group(1)
+          manifest = ''.join(hashlib.sha256(path.read_bytes()).hexdigest() + '  ' + name + '\n' for path, name in files)
+          archive = destination / ('lifecase-fixture-' + target + '.zip')
+          with zipfile.ZipFile(archive, 'w', compression=zipfile.ZIP_DEFLATED) as output:
+              for path, name in files:
+                  output.write(path, name)
+              output.writestr('SHA256SUMS', manifest)
+              output.writestr('build-info.json', json.dumps({'commit': os.environ['GITHUB_SHA'], 'target': target, 'protocol': 1, 'version': version}, indent=2) + '\n')
+          (destination / (archive.name + '.sha256')).write_text(hashlib.sha256(archive.read_bytes()).hexdigest() + '  ' + archive.name + '\n')
+          unpack = Path('build/archive-smoke')
+          with zipfile.ZipFile(archive) as package:
+              package.extractall(unpack)
+          installed = (unpack / fixture.name).resolve()
+          installed.chmod(0o755)
+          assert hashlib.sha256(installed.read_bytes()).digest() == hashlib.sha256(fixture.read_bytes()).digest()
+          with open(os.environ['GITHUB_ENV'], 'a', encoding='utf-8') as env:
+              env.write('LIFECASE_ARCHIVE_FIXTURE=' + str(installed) + '\n')
+          PY
+      - name: Execute the extracted release archive
+        run: '"build/cli/lifecase${FIXTURE_SUFFIX}" run --fixture "$LIFECASE_ARCHIVE_FIXTURE" --json reports/archive-smoke.json --junit reports/archive-smoke.xml'
+      - name: Upload prebuilt fixture
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: lifecase-fixture-${{ matrix.target }}
+          path: build/packages/*
+          if-no-files-found: error
+          retention-days: 14
+      - name: Upload bounded test evidence
+        if: always()
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: reports-${{ matrix.target }}
+          path: reports/
+          if-no-files-found: warn
+          retention-days: 14
+
+  clang:
+    name: Linux Clang native fixture
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - run: cmake -S . -B build/clang -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_COMPILER=clang++
+      - run: cmake --build build/clang --parallel 2
+      - run: ctest --test-dir build/clang --output-on-failure
+
+  release-gate:
+    if: always()
+    needs: [source, contracts, clang]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 2
+    steps:
+      - name: Require every platform and source check
+        env:
+          SOURCE_RESULT: ${{ needs.source.result }}
+          CONTRACTS_RESULT: ${{ needs.contracts.result }}
+          CLANG_RESULT: ${{ needs.clang.result }}
+        run: |
+          test "$SOURCE_RESULT" = success
+          test "$CONTRACTS_RESULT" = success
+          test "$CLANG_RESULT" = success

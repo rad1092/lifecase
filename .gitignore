@@ -1,0 +1,9 @@
+.tools/
+build/
+reports/
+**/bin/
+**/obj/
+*.nupkg
+.DS_Store
+**/TestResults/
+dotnet/results/
