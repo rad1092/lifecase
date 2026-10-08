@@ -47,3 +47,7 @@ Ready/go barriers reduce avoidable startup races. Scheduling, loaded CI hosts, a
 Deterministic output means stable scenario order, assertion identities, and status vocabulary. PIDs and timing observations change. JSON files from two correct runs need not be byte-identical. Unsupported capabilities become JUnit skipped entries; skipping does not demonstrate that a feature works.
 
 Lifecase is a correctness gate with bounded evidence, not a benchmark. Run it repeatedly on the platforms you ship, preserve reports, and review any runtime/compiler upgrade against those results.
+
+## Prebuilt archive baseline
+
+Release archives are tested on Ubuntu 24.04 x64 (GCC, glibc 2.39 baseline), macOS 15 ARM64 (Apple Clang), and Windows Server 2022 x64 (MSVC). The Windows fixture statically links the MSVC runtime. Older Linux distributions, Intel macOS, Windows ARM64, and other OS versions are untested; build from source when the archive baseline does not match your host. The macOS executable is unsigned and not notarized. This project does not ask users to disable platform security controls.

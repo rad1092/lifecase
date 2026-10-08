@@ -4,8 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"encoding/xml"
+	"errors"
 	"github.com/rad1092/lifecase/runner"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -177,5 +179,43 @@ func TestReadinessCanPrecedeStartedDelivery(t *testing.T) {
 	}
 	if r.Failed() {
 		t.Fatalf("transport latency caused false failure: %+v", r.Results)
+	}
+}
+
+type startFailureRunner struct{}
+
+func (startFailureRunner) Start(ctx context.Context, req runner.Request) (runner.Session, error) {
+	owned, e := (runner.Native{}).Start(ctx, req)
+	if e != nil {
+		return nil, e
+	}
+	// Model cancellation discovered only after the owned fixture spawned its child.
+	dir := ""
+	for i, a := range req.Args {
+		if a == "--dir" {
+			dir = req.Args[i+1]
+		}
+	}
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		if _, e := os.Stat(filepath.Join(dir, "parent-ready.json")); e == nil {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	_ = owned.Close()
+	return nil, errors.New("simulated startup transport failure")
+}
+func TestStartFailureCleansAlreadySpawnedDescendant(t *testing.T) {
+	f := os.Getenv("LIFECASE_FIXTURE")
+	if f == "" {
+		t.Skip("requires real native fixture")
+	}
+	r, e := Run(context.Background(), Options{Fixture: f, Runner: startFailureRunner{}, Scenarios: []string{"inherit"}})
+	if e != nil {
+		t.Fatal(e)
+	}
+	if !r.Failed() || !r.Results[0].DescendantClean {
+		t.Fatalf("failure cleanup incorrect: %+v", r.Results)
 	}
 }

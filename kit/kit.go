@@ -197,6 +197,30 @@ func runOne(ctx context.Context, o Options, name string) Result {
 	session, err := o.Runner.Start(ctx, runner.Request{V: 1, Op: "start", Fixture: fixture, Args: []string{"--scenario", scenario, "--dir", dir, "--token", token, "--lease-ms", "5000"}, CaptureLimit: 4096})
 	if err != nil {
 		check("launch", false, err.Error())
+		// Start may have created a fixture before noticing cancellation or a
+		// transport error. Preserve its control directory through cleanup.
+		control("stop")
+		until := time.Now().Add(5200 * time.Millisecond)
+		for time.Now().Before(until) {
+			p, parentKnown := readMarker(dir, "parent-ready.json", token, "parent", "ready")
+			parentGone := false
+			if parentKnown {
+				alive, e := processAlive(p.PID)
+				parentGone = e == nil && !alive
+			}
+			childGone := name != "inherit"
+			if c, ok := readMarker(dir, "child-ready.json", token, "child", "ready"); ok {
+				ack, valid := readMarker(dir, "child-exit.json", token, "child", "exit")
+				alive, e := processAlive(c.PID)
+				childGone = valid && ack.PID == c.PID && e == nil && !alive
+			}
+			if parentGone && childGone {
+				r.DescendantClean = childGone
+				break
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+		r.DurationMS = time.Since(start).Milliseconds()
 		return r
 	}
 	defer session.Close()
@@ -342,9 +366,9 @@ func runOne(ctx context.Context, o Options, name string) Result {
 	if child.PID > 0 {
 		until := time.Now().Add(5200 * time.Millisecond)
 		for time.Now().Before(until) {
-			_, ack := readMarker(dir, "child-exit.json", token, "child", "exit")
+			exit, ack := readMarker(dir, "child-exit.json", token, "child", "exit")
 			alive, e := processAlive(child.PID)
-			if ack && e == nil && !alive {
+			if ack && exit.PID == child.PID && e == nil && !alive {
 				r.DescendantClean = true
 				break
 			}
@@ -352,7 +376,10 @@ func runOne(ctx context.Context, o Options, name string) Result {
 		}
 		check("descendant_cleanup", r.DescendantClean, "token-owned exit marker and OS liveness inventory")
 	} else {
-		r.DescendantClean = true
+		r.DescendantClean = name != "inherit"
+		if name == "inherit" {
+			check("descendant_cleanup", false, "no authenticated child evidence")
+		}
 	}
 	if name == "inherit" {
 		check("inherited_pipes_held_until_release", inheritanceProved, "EOF before authenticated descendant stop is a failure")

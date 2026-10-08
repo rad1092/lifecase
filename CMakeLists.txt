@@ -7,6 +7,8 @@ set_target_properties(lifecase-fixture PROPERTIES CXX_EXTENSIONS OFF)
 find_package(Threads REQUIRED)
 target_link_libraries(lifecase-fixture PRIVATE Threads::Threads)
 if(MSVC)
+  # Prebuilt fixture needs no separately installed Visual C++ runtime.
+  set_property(TARGET lifecase-fixture PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
   target_compile_options(lifecase-fixture PRIVATE /W4 /WX /utf-8 /permissive-)
   target_compile_definitions(lifecase-fixture PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
 else()
