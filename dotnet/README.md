@@ -102,7 +102,7 @@ CliWrap's `PipeTarget.Null` intentionally does not open the corresponding output
 pipe. Use `PipeTarget.ToStream(Stream.Null)` when discarding data but retaining pipe
 semantics. These tests use real sinks for the inherited-pipe contract.
 
-No test sends a signal to an arbitrary PID or enumerates and kills a process tree.
+No test sends a signal to an arbitrary PID or implements its own process-tree killer.
 `Process.GetProcessById` is used only for read-only observation of the current
 CliWrap-owned parent or token-checked child; process termination is requested via
 that command's cancellation token. Descendants are released through their private

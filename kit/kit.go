@@ -360,11 +360,19 @@ func runOne(ctx context.Context, o Options, name string) Result {
 	if e := session.Close(); e != nil {
 		check("session_cleanup", false, e.Error())
 	}
+	until := time.Now().Add(5200 * time.Millisecond)
 	if child.PID == 0 {
-		child, _ = readMarker(dir, "child-ready.json", token, "child", "ready")
+		for {
+			child, _ = readMarker(dir, "child-ready.json", token, "child", "ready")
+			if child.PID > 0 || name != "inherit" || !time.Now().Before(until) {
+				break
+			}
+			// Retain stop and the private directory even if a failed startup
+			// hasn't published its descendant marker yet.
+			time.Sleep(10 * time.Millisecond)
+		}
 	}
 	if child.PID > 0 {
-		until := time.Now().Add(5200 * time.Millisecond)
 		for time.Now().Before(until) {
 			exit, ack := readMarker(dir, "child-exit.json", token, "child", "exit")
 			alive, e := processAlive(child.PID)

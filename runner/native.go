@@ -17,19 +17,21 @@ import (
 type Native struct{}
 
 type nativeSession struct {
-	stream     *eventStream
-	cmd        *exec.Cmd
-	stdin      *os.File
-	stdout     *os.File
-	stderr     *os.File
-	finished   chan struct{}
-	closing    atomic.Bool
-	closeOnce  sync.Once
-	closeErr   error
-	errorOnce  sync.Once
-	signalOnce sync.Once
-	commandMu  sync.Mutex
-	writeDone  chan struct{}
+	stream       *eventStream
+	cmd          *exec.Cmd
+	stdin        *os.File
+	stdout       *os.File
+	stderr       *os.File
+	finished     chan struct{}
+	parentEnd    chan struct{}
+	parentReaped atomic.Bool
+	closing      atomic.Bool
+	closeOnce    sync.Once
+	closeErr     error
+	errorOnce    sync.Once
+	signalOnce   sync.Once
+	commandMu    sync.Mutex
+	writeDone    chan struct{}
 }
 
 func (Native) Start(ctx context.Context, req Request) (Session, error) {
@@ -79,13 +81,20 @@ func (Native) Start(ctx context.Context, req Request) (Session, error) {
 	_ = outW.Close()
 	_ = errW.Close()
 	s := &nativeSession{stream: newEventStream(), cmd: cmd, stdin: inW,
-		stdout: outR, stderr: errR, finished: make(chan struct{})}
+		stdout: outR, stderr: errR, finished: make(chan struct{}), parentEnd: make(chan struct{})}
 	s.stream.emit(Event{Kind: "started", PID: cmd.Process.Pid})
 	var wg sync.WaitGroup
 	wg.Add(3)
 	go func() {
 		defer wg.Done()
 		err := cmd.Wait()
+		// On Windows Wait releases the process handle. A subsequent Kill may
+		// therefore return EINVAL rather than os.ErrProcessDone. Publish the
+		// successful reap before the event, without readers racing ProcessState.
+		if cmd.ProcessState != nil {
+			s.parentReaped.Store(true)
+		}
+		close(s.parentEnd)
 		_ = s.stdin.Close()
 		if cmd.ProcessState != nil {
 			s.stream.emit(Event{Kind: "parent_exit", ExitCode: cmd.ProcessState.ExitCode()})
@@ -162,18 +171,11 @@ func (s *nativeSession) Command(op string) error {
 	}
 	switch op {
 	case "kill":
-		err := s.cmd.Process.Kill()
-		if errors.Is(err, os.ErrProcessDone) {
-			return nil
-		}
-		return err
+		return s.controlParent(s.cmd.Process.Kill)
 	case "signal":
-		err := terminate(s.cmd.Process)
+		err := s.controlParent(func() error { return terminate(s.cmd.Process) })
 		if errors.Is(err, ErrUnsupported) {
 			s.signalOnce.Do(func() { s.stream.emit(Event{Kind: "unsupported", Message: "POSIX SIGTERM is unavailable on Windows"}) })
-			return nil
-		}
-		if errors.Is(err, os.ErrProcessDone) {
 			return nil
 		}
 		return err
@@ -200,13 +202,39 @@ func (s *nativeSession) Command(op string) error {
 	}
 }
 
+// controlParent makes commands idempotent after a confirmed reap. If Wait
+// releases the handle between the check and the command, only independent wait
+// completion can turn the command's error into success.
+func (s *nativeSession) controlParent(control func() error) error {
+	if s.parentReaped.Load() {
+		return nil
+	}
+	err := control()
+	if err == nil || errors.Is(err, os.ErrProcessDone) {
+		return nil
+	}
+	if errors.Is(err, ErrUnsupported) {
+		return err
+	}
+	select {
+	case <-s.parentEnd:
+	case <-time.After(100 * time.Millisecond):
+	}
+	if s.parentReaped.Load() {
+		return nil
+	}
+	return err
+}
+
 func (s *nativeSession) Close() error {
 	s.closeOnce.Do(func() {
 		s.commandMu.Lock()
 		s.closing.Store(true)
-		err := s.cmd.Process.Kill()
-		if err != nil && !errors.Is(err, os.ErrProcessDone) {
-			s.closeErr = err
+		if !s.parentReaped.Load() {
+			err := s.cmd.Process.Kill()
+			if err != nil && !errors.Is(err, os.ErrProcessDone) {
+				s.closeErr = err
+			}
 		}
 		_ = s.stdin.Close()
 		_ = s.stdout.Close()
@@ -220,6 +248,13 @@ func (s *nativeSession) Close() error {
 		case <-deadline.C:
 			s.closeErr = errors.Join(s.closeErr, errors.New("fixture did not reap within cleanup deadline"))
 			return
+		}
+		if s.parentReaped.Load() {
+			// A failed Kill racing Wait is harmless only now that reaping is
+			// independently confirmed. Unexpected errors without proof remain.
+			s.closeErr = nil
+		} else {
+			s.closeErr = errors.Join(s.closeErr, errors.New("fixture wait did not confirm parent exit"))
 		}
 		if writeDone != nil {
 			select {

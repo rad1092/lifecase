@@ -124,6 +124,9 @@ func (r External) Start(ctx context.Context, req Request) (Session, error) {
 	}()
 	if err := s.write(ctx, req); err != nil {
 		_ = s.Close()
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return nil, ctxErr
+		}
 		return nil, fmt.Errorf("write adapter start request: %w", err)
 	}
 	if err := ctx.Err(); err != nil {

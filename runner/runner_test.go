@@ -68,6 +68,28 @@ func TestNativeConcurrentDrainBoundsCapture(t *testing.T) {
 	}
 }
 
+func TestNativeCleanupAfterNaturalExit(t *testing.T) {
+	s, err := (Native{}).Start(context.Background(), helperRequest(t, "marker", filepath.Join(t.TempDir(), "launched")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	events := collect(t, s)
+	if len(events) != 4 {
+		t.Fatalf("unexpected lifecycle events: %+v", events)
+	}
+	for range 2 {
+		if err := s.Command("kill"); err != nil {
+			t.Fatalf("kill after confirmed exit must be idempotent: %v", err)
+		}
+	}
+	for range 2 {
+		if err := s.Close(); err != nil {
+			t.Fatalf("Close after natural exit must succeed: %v", err)
+		}
+	}
+}
+
 func TestNativeParentExitPrecedesInheritedPipeEOF(t *testing.T) {
 	dir := t.TempDir()
 	stop := filepath.Join(dir, "stop")
@@ -93,6 +115,9 @@ func TestNativeParentExitPrecedesInheritedPipeEOF(t *testing.T) {
 		}
 	}
 exited:
+	if err := s.Command("kill"); err != nil {
+		t.Fatalf("kill after parent exit with inherited pipes: %v", err)
+	}
 	select {
 	case e := <-s.Events():
 		t.Fatalf("unexpected event before descendant release: %+v", e)
@@ -107,6 +132,9 @@ exited:
 	}
 	if _, err := os.Stat(filepath.Join(dir, "child-exit")); err != nil {
 		t.Fatalf("child did not acknowledge cleanup: %v", err)
+	}
+	if err := s.Close(); err != nil {
+		t.Fatalf("Close after inherited pipe cleanup: %v", err)
 	}
 }
 

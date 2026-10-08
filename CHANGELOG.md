@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.1.0 — 2026-10-08
 
 - Introduce protocol v1 for controlled native fixtures and external JSON Lines runner adapters.
 - Add distinct contracts for parent exit, actual stdout/stderr EOF, descendant cleanup, and shutdown behavior.
