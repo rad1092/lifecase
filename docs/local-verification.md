@@ -12,3 +12,9 @@ On 2026-10-08, macOS ARM64 with Apple Clang 21, Go 1.27.1 and .NET SDK 8.0.425:
 - Final fixture inventories for native, Go helper and .NET local suites found no running owned test processes.
 
 The normal consumer path is a prebuilt fixture plus the .NET test project. Building the native fixture or running the optional Go verifier adds development tooling, and is not necessary just to consume the fixture. No adoption or performance claim is inferred from these local tests.
+
+## 0.1.1 diagnostic watchdog regression
+
+A release review found that 0.1.0 stopped its run-local watchdog before emitting an exception diagnostic. A synthetic parent-ready collision with a prefilled blocking stderr pipe (65,536 bytes) and lease 1000 ms remained alive after 2005 ms; an independent outer timeout then killed and reaped only the test-owned process. The dedicated regression also fails against the preserved 0.1.0 binary with a three-second outer timeout.
+
+The patch keeps one watchdog active from entry through diagnostics and flush, and exits before that guard is destroyed. The same full-pipe error case exited with watchdog code 124 after approximately 1.04 seconds. The expanded native suite passed on local macOS: 21 tests, 19 pass and two Windows-only skips, 22.336 seconds. Windows-specific Unicode and all other platform results must be checked in the exact patch release CI, recorded in the release notes.

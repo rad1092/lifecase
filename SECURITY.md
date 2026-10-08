@@ -21,3 +21,5 @@ If the repository's Security tab offers private vulnerability reporting, use it.
 Useful information includes the commit or release, OS and runtime versions, the smallest synthetic reproducer, and redacted JSON/JUnit evidence. Do not include user data or unrelated process inventories.
 
 During the initial release series, fixes target the latest published version. No response-time guarantee or support for older versions is implied.
+
+Known fixed issue: 0.1.0's exception diagnostic path could outlive its lease when inherited stderr was full. Fixture 0.1.1 protects diagnostics and final flush with the entry watchdog. See CHANGELOG.md; use the latest patch release for bounded error-path behavior.

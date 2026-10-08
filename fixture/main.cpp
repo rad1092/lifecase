@@ -52,15 +52,33 @@ struct Options {
 
 class Watchdog {
  public:
-  explicit Watchdog(int lease_ms) : thread_([this, lease_ms] {
-    std::unique_lock<std::mutex> lock(mutex_);
-    if (!cv_.wait_for(lock, std::chrono::milliseconds(lease_ms), [this] { return finished_; })) {
-      // No buffered I/O, atexit handlers, or joins: also bounds blocked writes.
-      std::_Exit(124);
+  explicit Watchdog(int lease_ms)
+      : started_(Clock::now()), deadline_(started_ + std::chrono::milliseconds(lease_ms)), thread_([this] {
+    try {
+      std::unique_lock<std::mutex> lock(mutex_);
+      while (!finished_) {
+        // Copy before waiting: set_lease may change deadline_ while this lock is released.
+        const auto deadline = deadline_;
+        if (cv_.wait_until(lock, deadline) == std::cv_status::timeout && Clock::now() >= deadline_) {
+          // No buffered I/O, atexit handlers, or joins: also bounds blocked writes.
+          std::_Exit(124);
+        }
+      }
+    } catch (...) {
+      // Avoid std::terminate diagnostics if synchronization itself fails.
+      std::_Exit(70);
     }
   }) {}
   Watchdog(const Watchdog&) = delete;
   Watchdog& operator=(const Watchdog&) = delete;
+  void set_lease(int lease_ms) {
+    {
+      std::lock_guard<std::mutex> lock(mutex_);
+      // Argument parsing never grants a fresh time budget.
+      deadline_ = started_ + std::chrono::milliseconds(lease_ms);
+    }
+    cv_.notify_one();
+  }
   ~Watchdog() {
     {
       std::lock_guard<std::mutex> lock(mutex_);
@@ -73,6 +91,8 @@ class Watchdog {
   std::mutex mutex_;
   std::condition_variable cv_;
   bool finished_ = false;
+  const Clock::time_point started_;
+  Clock::time_point deadline_;
   std::thread thread_;
 };
 
@@ -338,7 +358,6 @@ std::uint64_t spawn_child(const Options& options) {
 }
 
 int run(const Options& options) {
-  Watchdog watchdog(options.lease_ms);
   validate_directory(options.directory);
 #ifndef _WIN32
   struct sigaction ignored{};
@@ -409,39 +428,57 @@ int run(const Options& options) {
   return 0;
 }
 
-int main_impl(const std::vector<std::string>& args) {
+int main_impl(const std::vector<std::string>& args, Watchdog& watchdog) {
+  if (args.size() == 2 && args[1] == "--version") {
+    std::cout << "lifecase-fixture 0.1.1 protocol 1\n";
+    return 0;
+  }
+  if (args.size() == 2 && args[1] == "--help") {
+    std::cout << "Usage: lifecase-fixture --scenario NAME --dir ABSOLUTE_PRIVATE_DIR --token HEX32 [--lease-ms 5000]\n"
+        "Scenarios: exit flood stdin-blocked cooperative uncooperative crash inherit startup-timeout spawn-cancel signal\n"
+        "Every process exits within its 1000..10000 ms lease. See docs/protocol-v1.md.\n";
+    return 0;
+  }
+  const Options options = parse(args);
+  watchdog.set_lease(options.lease_ms);
+  return run(options);
+}
+
+template <typename ReadArguments>
+[[noreturn]] void guarded_entry(ReadArguments read_arguments) noexcept {
   try {
-    if (args.size() == 2 && args[1] == "--version") {
-      std::cout << "lifecase-fixture 0.1.0 protocol 1\n";
-      return 0;
+    // Bootstrap budget covers argument conversion, invalid arguments, help and
+    // version output. Validated options adjust the original entry deadline.
+    Watchdog watchdog(5000);
+    int exit_code = 64;
+    try {
+      exit_code = main_impl(read_arguments(), watchdog);
+    } catch (const std::exception& error) {
+      // Keep the watchdog alive if a full inherited stderr blocks this message.
+      std::cerr << "lifecase-fixture: " << std::string(error.what()).substr(0, 400) << '\n';
     }
-    if (args.size() == 2 && args[1] == "--help") {
-      std::cout << "Usage: lifecase-fixture --scenario NAME --dir ABSOLUTE_PRIVATE_DIR --token HEX32 [--lease-ms 5000]\n"
-          "Scenarios: exit flood stdin-blocked cooperative uncooperative crash inherit startup-timeout spawn-cancel signal\n"
-          "Every process exits within its 1000..10000 ms lease. See docs/protocol-v1.md.\n";
-      return 0;
-    }
-    return run(parse(args));
-  } catch (const std::exception& error) {
-    std::cerr << "lifecase-fixture: " << std::string(error.what()).substr(0, 400) << '\n';
-    return 64;
+    std::cout.flush();
+    std::cerr.flush();
+    // Returning from main would disarm the watchdog before static/stdio teardown.
+    std::_Exit(exit_code);
+  } catch (...) {
+    // Watchdog construction or diagnostics themselves can fail. Never attempt
+    // unguarded fallback I/O or buffered teardown on this path.
+    std::_Exit(70);
   }
 }
 }  // namespace
 
 #ifdef _WIN32
 int wmain(int argc, wchar_t* argv[]) {
-  try {
+  guarded_entry([&] {
     std::vector<std::string> args;
     for (int i = 0; i < argc; ++i) args.push_back(utf8(argv[i]));
-    return main_impl(args);
-  } catch (const std::exception&) {
-    std::cerr << "lifecase-fixture: invalid Unicode argument\n";
-    return 64;
-  }
+    return args;
+  });
 }
 #else
 int main(int argc, char* argv[]) {
-  return main_impl(std::vector<std::string>(argv, argv + argc));
+  guarded_entry([&] { return std::vector<std::string>(argv, argv + argc); });
 }
 #endif

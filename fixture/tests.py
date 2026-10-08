@@ -71,6 +71,46 @@ def event(directory, name):
 
 
 @contextlib.contextmanager
+def full_blocking_pipe():
+    """A pipe with a live reader but no available write space (Python 3.12+ on Windows)."""
+    reader, writer = os.pipe()
+    try:
+        os.set_blocking(writer, False)
+        filled = 0
+        for chunk in (b"X" * 4096, b"X"):
+            while True:
+                try:
+                    written = os.write(writer, chunk)
+                except BlockingIOError:
+                    break
+                if not written:
+                    break
+                filled += written
+                if filled > 4 * 1024 * 1024:
+                    raise AssertionError("pipe fill exceeded synthetic test bound")
+        assert filled > 0
+        # The child must receive a blocking handle; nonblocking stderr would hide the bug.
+        os.set_blocking(writer, True)
+        yield writer
+    finally:
+        os.close(writer)
+        os.close(reader)
+
+
+def blocked_output_exit(arguments, target, timeout):
+    with full_blocking_pipe() as writer:
+        streams = {"stdout": subprocess.DEVNULL, "stderr": subprocess.DEVNULL}
+        streams[target] = writer
+        process = subprocess.Popen([str(FIXTURE), *arguments], stdin=subprocess.DEVNULL, **streams)
+        try:
+            return process.wait(timeout=timeout)
+        finally:
+            if process.poll() is None:
+                process.kill()  # Exact child owned by this test, including assertion failures.
+                process.wait(timeout=2)
+
+
+@contextlib.contextmanager
 def launched(scenario, lease=5000, executable=FIXTURE, directory_prefix="lifecase-native-"):
     with tempfile.TemporaryDirectory(prefix=directory_prefix) as temporary:
         directory = Path(temporary)
@@ -145,6 +185,38 @@ class NativeFixtureTests(unittest.TestCase):
             out, err = process.communicate(timeout=1)
             self.assertLess(len(out), 262144)
             self.assertLess(len(err), 262144)
+
+    def test_error_diagnostic_cannot_outlive_watchdog(self):
+        with tempfile.TemporaryDirectory(prefix="lifecase-error-pipe-") as temporary:
+            directory = Path(temporary)
+            directory.chmod(0o700)
+            # Force write_event to throw after the configured lease is active.
+            (directory / "parent-ready.json").write_text("collision")
+            arguments = ["--scenario", "exit", "--dir", str(directory),
+                         "--token", "a" * 32, "--lease-ms", "1000"]
+            self.assertEqual(blocked_output_exit(arguments, "stderr", timeout=3), 124)
+
+    def test_parse_error_diagnostic_has_bootstrap_watchdog(self):
+        self.assertEqual(blocked_output_exit(["--invalid"], "stderr", timeout=8), 124)
+
+    def test_help_and_version_flush_have_bootstrap_watchdog(self):
+        for option in ("--help", "--version"):
+            with self.subTest(option=option):
+                self.assertEqual(blocked_output_exit([option], "stdout", timeout=8), 124)
+
+    @unittest.skipUnless(os.name == "nt", "Windows UTF-16 argv conversion")
+    def test_windows_invalid_unicode_diagnostic_is_bounded(self):
+        self.assertEqual(blocked_output_exit(["\ud800"], "stderr", timeout=8), 124)
+
+    def test_help_and_version_output_survive_immediate_exit(self):
+        for option, expected in (("--help", "Usage: lifecase-fixture"),
+                                 ("--version", "protocol 1")):
+            with self.subTest(option=option):
+                result = subprocess.run([str(FIXTURE), option], capture_output=True, text=True, timeout=2)
+                self.assertEqual(result.returncode, 0)
+                self.assertIn(expected, result.stdout)
+                self.assertTrue(result.stdout.endswith("\n"))
+                self.assertEqual(result.stderr, "")
 
     def test_stdin_backpressure_and_stop(self):
         with launched("stdin-blocked") as (process, directory, token):

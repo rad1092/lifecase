@@ -11,7 +11,7 @@ ctest --test-dir build/native -C Release --output-on-failure
 cmake --install build/native --config Release --prefix build/install
 ```
 
-CTest runs `fixture/tests.py` when Python 3 is available. These tests start the
+CTest runs `fixture/tests.py` when Python 3 is available (3.12+ on Windows for the pipe-saturation regression). These tests start the
 actual compiled executable, including from a path containing spaces and Korean
 characters. They exercise independent stdout/stderr drains, blocked writes,
 readiness cancellation, inherited pipes, signal handling, and hard watchdogs.
@@ -47,3 +47,9 @@ Native API references:
 - [Apple `posix_spawn` documentation](https://developer.apple.com/library/archive/documentation/System/Conceptual/ManPages_iPhoneOS/man2/posix_spawn.2.html)
 - [Microsoft `CreateProcessW` documentation](https://learn.microsoft.com/en-us/windows/win32/api/processthreadsapi/nf-processthreadsapi-createprocessw)
 - [Microsoft C command-line parsing rules](https://learn.microsoft.com/en-us/cpp/c-language/parsing-c-command-line-arguments)
+
+## Diagnostic output and bootstrap limits
+
+Starting with 0.1.1, the watchdog starts before argv conversion and protects parsing, error diagnostics, help/version output, and final stream flush. A validated `--lease-ms` applies to the original entry deadline; it does not grant a fresh budget. Before validation, including malformed invocations and help/version, the bound is 5000 ms. Exit 124 identifies watchdog expiry. Failure to establish or operate the guard exits immediately with code 70 without attempting unguarded diagnostics.
+
+Version 0.1.0 could block indefinitely writing an exception diagnostic to a full inherited stderr pipe because stack unwinding had already stopped its watchdog. Upgrade to 0.1.1 when using fixtures with unconsumed output. The regression tests prefill an owned pipe, restore blocking mode, keep the read end open without draining, and require the fixture to terminate. An independent test timeout kills only that test's Popen handle on failure.
