@@ -3,6 +3,7 @@
 ## 0.1.3 — 2026-10-12
 
 - Reserve all output files before launching a fixture, using destination filesystem rules to reject symlink-parent and case aliases. A collision removes empty reservations without leaving partial evidence. Existing files are still never overwritten.
+- Roll back only newly created empty parent directories when reservation fails, including ancestor/descendant output paths. Existing directories and any new contents remain untouched.
 - Keep output handles for the run. Ordinary failures remove unused reservations; a hard kill can leave an empty file, and two report writes are not an atomic transaction.
 
 ## 0.1.2 — 2026-10-12
