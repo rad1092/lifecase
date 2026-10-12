@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.3 — 2026-10-12
+
+- Reserve all output files before launching a fixture, using destination filesystem rules to reject symlink-parent and case aliases. A collision removes empty reservations without leaving partial evidence. Existing files are still never overwritten.
+- Keep output handles for the run. Ordinary failures remove unused reservations; a hard kill can leave an empty file, and two report writes are not an atomic transaction.
+
 ## 0.1.2 — 2026-10-12
 
 - Refuse existing report paths before starting scenarios and create reports exclusively. JSON/JUnit output can no longer truncate an existing report, a fixture executable, or a symlink target.

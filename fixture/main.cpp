@@ -430,7 +430,7 @@ int run(const Options& options) {
 
 int main_impl(const std::vector<std::string>& args, Watchdog& watchdog) {
   if (args.size() == 2 && args[1] == "--version") {
-    std::cout << "lifecase-fixture 0.1.2 protocol 1\n";
+    std::cout << "lifecase-fixture 0.1.3 protocol 1\n";
     return 0;
   }
   if (args.size() == 2 && args[1] == "--help") {

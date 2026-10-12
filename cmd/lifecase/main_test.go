@@ -80,3 +80,87 @@ func TestReportSymlinkDoesNotChangeTarget(t *testing.T) {
 		t.Fatalf("target changed: %q, %v", actual, err)
 	}
 }
+
+func TestRejectsAliasedParentsBeforeLaunchingFixture(t *testing.T) {
+	dir := t.TempDir()
+	real, alias := filepath.Join(dir, "real"), filepath.Join(dir, "alias")
+	if err := os.Mkdir(real, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(real, alias); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	// The nested parents do not exist yet, so resolving only existing full
+	// parent paths would miss this alias too.
+	first, second := filepath.Join(real, "new", "report"), filepath.Join(alias, "new", "report")
+	var out, stderr bytes.Buffer
+	code := run([]string{"run", "--fixture", "not-an-executable", "--json", first, "--junit", second}, &out, &stderr)
+	if code != 2 || !strings.Contains(stderr.String(), "different output paths") {
+		t.Fatalf("exit %d: %s", code, stderr.String())
+	}
+	if _, err := os.Lstat(first); !os.IsNotExist(err) {
+		t.Fatalf("partial report remains: %v", err)
+	}
+}
+
+func TestCaseAliasesUseDestinationFilesystemRules(t *testing.T) {
+	dir := t.TempDir()
+	probe := filepath.Join(dir, "Probe")
+	if err := os.WriteFile(probe, nil, 0600); err != nil {
+		t.Fatal(err)
+	}
+	_, caseErr := os.Stat(filepath.Join(dir, "probe"))
+	first, second := filepath.Join(dir, "Report"), filepath.Join(dir, "report")
+	outputs, err := reserveOutputs(first, second)
+	if caseErr == nil {
+		if err == nil || !strings.Contains(err.Error(), "different output paths") {
+			t.Fatalf("case alias accepted: %v", err)
+		}
+	} else {
+		if err != nil {
+			t.Fatalf("distinct case-sensitive paths refused: %v", err)
+		}
+		cleanupOutputs(outputs)
+	}
+	if _, err := os.Lstat(first); !os.IsNotExist(err) {
+		t.Fatalf("reservation remains: %v", err)
+	}
+	if _, err := os.Lstat(second); !os.IsNotExist(err) {
+		t.Fatalf("reservation remains: %v", err)
+	}
+}
+
+func TestFailedReservationRemovesOnlyOwnedEmptyFiles(t *testing.T) {
+	dir := t.TempDir()
+	first := filepath.Join(dir, "report")
+	blocker := filepath.Join(dir, "not-a-directory")
+	if err := os.WriteFile(blocker, []byte("keep"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := reserveOutputs(first, filepath.Join(blocker, "report")); err == nil {
+		t.Fatal("invalid output accepted")
+	}
+	if _, err := os.Lstat(first); !os.IsNotExist(err) {
+		t.Fatalf("partial reservation remains: %v", err)
+	}
+	actual, err := os.ReadFile(blocker)
+	if err != nil || string(actual) != "keep" {
+		t.Fatalf("existing file changed: %q %v", actual, err)
+	}
+}
+
+func TestReservationCleanupPreservesWrittenOutput(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "report")
+	outputs, err := reserveOutputs(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := outputs[0].write([]byte("evidence")); err != nil {
+		t.Fatal(err)
+	}
+	cleanupOutputs(outputs)
+	actual, err := os.ReadFile(path)
+	if err != nil || string(actual) != "evidence" {
+		t.Fatalf("report not retained: %q %v", actual, err)
+	}
+}

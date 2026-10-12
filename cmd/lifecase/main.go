@@ -45,10 +45,12 @@ func run(argv []string, out, errOut io.Writer) int {
 		fmt.Fprintln(errOut, "--fixture is required and positional arguments are not accepted")
 		return 2
 	}
-	if e := validateOutputs(*jsonPath, *junit); e != nil {
+	outputs, e := reserveOutputs(*jsonPath, *junit)
+	if e != nil {
 		fmt.Fprintln(errOut, e)
 		return 2
 	}
+	defer cleanupOutputs(outputs)
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer cancel()
 	var subject runner.Runner = runner.Native{}
@@ -69,7 +71,7 @@ func run(argv []string, out, errOut io.Writer) int {
 	if *jsonPath == "" {
 		_, e = out.Write(b)
 	} else {
-		e = write(*jsonPath, b)
+		e = outputs[0].write(b)
 	}
 	if e != nil {
 		fmt.Fprintln(errOut, e)
@@ -78,7 +80,7 @@ func run(argv []string, out, errOut io.Writer) int {
 	if *junit != "" {
 		var sb strings.Builder
 		if e = report.WriteJUnit(&sb); e == nil {
-			e = write(*junit, []byte(sb.String()))
+			e = outputs[1].write([]byte(sb.String()))
 		}
 		if e != nil {
 			fmt.Fprintln(errOut, e)
@@ -90,6 +92,81 @@ func run(argv []string, out, errOut io.Writer) int {
 	}
 	return 0
 }
+
+type reservedOutput struct {
+	file *os.File
+	info os.FileInfo
+	keep bool
+}
+
+// Let the destination filesystem decide whether names alias: symlinked
+// parents, case folding and Unicode normalization need no guessed string rules.
+// Reserve every output before launching the fixture and keep those handles.
+func reserveOutputs(paths ...string) ([]*reservedOutput, error) {
+	if e := validateOutputs(paths...); e != nil {
+		return nil, e
+	}
+	outputs := make([]*reservedOutput, len(paths))
+	for i, path := range paths {
+		if path == "" {
+			continue
+		}
+		if e := os.MkdirAll(filepath.Dir(path), 0755); e != nil {
+			cleanupOutputs(outputs)
+			return nil, e
+		}
+		f, e := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0644)
+		if e != nil {
+			if info, statErr := os.Stat(path); statErr == nil {
+				for _, previous := range outputs {
+					if previous != nil && os.SameFile(previous.info, info) {
+						e = fmt.Errorf("JSON and JUnit reports require different output paths: %s", path)
+						break
+					}
+				}
+			}
+			cleanupOutputs(outputs)
+			return nil, e
+		}
+		info, e := f.Stat()
+		if e != nil {
+			f.Close()
+			cleanupOutputs(outputs)
+			return nil, e
+		}
+		outputs[i] = &reservedOutput{file: f, info: info}
+	}
+	return outputs, nil
+}
+
+func (output *reservedOutput) write(data []byte) error {
+	_, e := output.file.Write(data)
+	closeErr := output.file.Close()
+	if e != nil {
+		return e
+	}
+	if closeErr != nil {
+		return closeErr
+	}
+	output.keep = true
+	return nil
+}
+
+func cleanupOutputs(outputs []*reservedOutput) {
+	for _, output := range outputs {
+		if output == nil {
+			continue
+		}
+		output.file.Close()
+		// Never remove a replacement or symlink installed by another actor.
+		if !output.keep {
+			if current, e := os.Lstat(output.file.Name()); e == nil && os.SameFile(output.info, current) {
+				os.Remove(output.file.Name())
+			}
+		}
+	}
+}
+
 func write(path string, b []byte) error {
 	if e := os.MkdirAll(filepath.Dir(path), 0755); e != nil {
 		return e
