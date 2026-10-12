@@ -45,7 +45,8 @@ Runner architecture and public-runner availability are checked against
    Require all jobs, including `release-gate`, to pass for that exact SHA.
 4. Download the three fixture artifacts and their reports from that run. Each
    artifact contains a ZIP and a SHA-256 sidecar. Each ZIP contains the installed
-   fixture, MIT license, protocol document, file checksums, and source commit
+   fixture, the optional `lifecase` verifier executable (since 0.1.2), MIT
+   license, protocol document, file checksums, and source commit
    metadata. Check that the metadata commit matches the proposed release SHA.
 5. Inspect JSON/JUnit and .NET TRX results. Report failures, unsupported scenarios,
    and unrun platforms separately. Timing values are observed evidence rather
@@ -57,7 +58,8 @@ Runner architecture and public-runner availability are checked against
 ## Install smoke tests
 
 The CI smoke tests execute the installed fixture and then the extracted release
-ZIP through the complete Go scenario verifier:
+ZIP through its own bundled verifier, including an attempt to overwrite the
+fixture with a report that must fail without changing the fixture's hash:
 
 ```sh
 cmake -S . -B build/native -DCMAKE_BUILD_TYPE=Release

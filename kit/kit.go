@@ -16,7 +16,7 @@ import (
 	"github.com/rad1092/lifecase/runner"
 )
 
-const Version = "0.1.1"
+const Version = "0.1.2"
 
 var Scenarios = []string{"exit", "flood", "stdin-blocked", "cooperative", "uncooperative", "crash", "inherit", "unicode-path", "startup-timeout", "spawn-cancel", "signal"}
 

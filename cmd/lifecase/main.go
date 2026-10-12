@@ -45,6 +45,10 @@ func run(argv []string, out, errOut io.Writer) int {
 		fmt.Fprintln(errOut, "--fixture is required and positional arguments are not accepted")
 		return 2
 	}
+	if e := validateOutputs(*jsonPath, *junit); e != nil {
+		fmt.Fprintln(errOut, e)
+		return 2
+	}
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer cancel()
 	var subject runner.Runner = runner.Native{}
@@ -90,5 +94,39 @@ func write(path string, b []byte) error {
 	if e := os.MkdirAll(filepath.Dir(path), 0755); e != nil {
 		return e
 	}
-	return os.WriteFile(path, b, 0644)
+	// Exclusive creation also protects against an existing executable, symlink,
+	// or a destination created after preflight. Never truncate a user's file.
+	f, e := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0644)
+	if e != nil {
+		return e
+	}
+	_, e = f.Write(b)
+	closeErr := f.Close()
+	if e != nil {
+		return e
+	}
+	return closeErr
+}
+
+func validateOutputs(paths ...string) error {
+	seen := make(map[string]bool)
+	for _, path := range paths {
+		if path == "" {
+			continue
+		}
+		if _, e := os.Lstat(path); e == nil {
+			return fmt.Errorf("report path already exists; choose a new filename: %s", path)
+		} else if !os.IsNotExist(e) {
+			return e
+		}
+		absolute, e := filepath.Abs(path)
+		if e != nil {
+			return e
+		}
+		if seen[absolute] {
+			return fmt.Errorf("JSON and JUnit reports require different output paths: %s", path)
+		}
+		seen[absolute] = true
+	}
+	return nil
 }
