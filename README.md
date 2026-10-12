@@ -43,7 +43,7 @@ Starting with **v0.1.2**, each archive also includes the `lifecase` verifier
 ./lifecase run --fixture ./lifecase-fixture --scenario exit --scenario flood --json reports/first.json --junit reports/first.xml
 ```
 
-Expect `0.1.2`, exit `0`, and two passing results. On PowerShell use
+Expect `0.1.3`, exit `0`, and two passing results. On PowerShell use
 `.\lifecase.exe` and `.\lifecase-fixture.exe`. No Go or .NET is needed for this
 packaged verifier exercise; .NET 8 is required for the CliWrap contracts above.
 
@@ -95,6 +95,12 @@ lifecase run --fixture ./build/lifecase-fixture --adapter ./my-runner-adapter --
 ```
 
 Use one `--adapter-arg` per argument. For a managed adapter you supply, use `--adapter dotnet --adapter-arg /absolute/path/to/Your.Adapter.dll`. The included CliWrap tests consume the fixture directly; they do not require this protocol. Adapter stdout is reserved for protocol messages. Adapters execute with your permissions and must be trusted.
+
+In v0.1.3, named report files are exclusively reserved before the fixture starts.
+The destination filesystem rejects symlink-parent and case aliases before any
+scenario runs; collision cleanup leaves no report. Empty reservations may be
+visible during a run. A hard kill may leave an empty reservation; choose fresh
+names for a retry. Two completed report writes are still not atomic.
 
 Starting with v0.1.2, JSON and JUnit output paths must be **new files**
 and different from each other. Existing files (including fixture executables and
