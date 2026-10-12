@@ -71,7 +71,7 @@ func run(argv []string, out, errOut io.Writer) int {
 	if *jsonPath == "" {
 		_, e = out.Write(b)
 	} else {
-		e = outputs[0].write(b)
+		e = outputs.files[0].write(b)
 	}
 	if e != nil {
 		fmt.Fprintln(errOut, e)
@@ -80,7 +80,7 @@ func run(argv []string, out, errOut io.Writer) int {
 	if *junit != "" {
 		var sb strings.Builder
 		if e = report.WriteJUnit(&sb); e == nil {
-			e = outputs[1].write([]byte(sb.String()))
+			e = outputs.files[1].write([]byte(sb.String()))
 		}
 		if e != nil {
 			fmt.Fprintln(errOut, e)
@@ -99,26 +99,36 @@ type reservedOutput struct {
 	keep bool
 }
 
+type reservedDirectory struct {
+	path string
+	info os.FileInfo
+}
+
+type outputReservations struct {
+	files       []*reservedOutput
+	directories []reservedDirectory
+}
+
 // Let the destination filesystem decide whether names alias: symlinked
 // parents, case folding and Unicode normalization need no guessed string rules.
 // Reserve every output before launching the fixture and keep those handles.
-func reserveOutputs(paths ...string) ([]*reservedOutput, error) {
+func reserveOutputs(paths ...string) (*outputReservations, error) {
 	if e := validateOutputs(paths...); e != nil {
 		return nil, e
 	}
-	outputs := make([]*reservedOutput, len(paths))
+	outputs := &outputReservations{files: make([]*reservedOutput, len(paths))}
 	for i, path := range paths {
 		if path == "" {
 			continue
 		}
-		if e := os.MkdirAll(filepath.Dir(path), 0755); e != nil {
+		if e := outputs.createParent(filepath.Dir(path)); e != nil {
 			cleanupOutputs(outputs)
 			return nil, e
 		}
 		f, e := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0644)
 		if e != nil {
 			if info, statErr := os.Stat(path); statErr == nil {
-				for _, previous := range outputs {
+				for _, previous := range outputs.files {
 					if previous != nil && os.SameFile(previous.info, info) {
 						e = fmt.Errorf("JSON and JUnit reports require different output paths: %s", path)
 						break
@@ -134,9 +144,41 @@ func reserveOutputs(paths ...string) ([]*reservedOutput, error) {
 			cleanupOutputs(outputs)
 			return nil, e
 		}
-		outputs[i] = &reservedOutput{file: f, info: info}
+		outputs.files[i] = &reservedOutput{file: f, info: info}
 	}
 	return outputs, nil
+}
+
+// Track only directories created by this reservation. A failed output can be
+// an ancestor of another output, including through case or symlink aliases.
+// Removing owned empty parents in reverse order handles those filesystem rules.
+func (outputs *outputReservations) createParent(path string) error {
+	if info, e := os.Stat(path); e == nil {
+		if !info.IsDir() {
+			return fmt.Errorf("report parent is not a directory: %s", path)
+		}
+		return nil
+	} else if !os.IsNotExist(e) {
+		return e
+	}
+	if e := outputs.createParent(filepath.Dir(path)); e != nil {
+		return e
+	}
+	if e := os.Mkdir(path, 0755); e != nil {
+		// Another actor may have created it after Stat. It is not ours to remove.
+		if os.IsExist(e) {
+			if info, statErr := os.Stat(path); statErr == nil && info.IsDir() {
+				return nil
+			}
+		}
+		return e
+	}
+	info, e := os.Lstat(path)
+	if e != nil {
+		return e
+	}
+	outputs.directories = append(outputs.directories, reservedDirectory{path: path, info: info})
+	return nil
 }
 
 func (output *reservedOutput) write(data []byte) error {
@@ -152,8 +194,11 @@ func (output *reservedOutput) write(data []byte) error {
 	return nil
 }
 
-func cleanupOutputs(outputs []*reservedOutput) {
-	for _, output := range outputs {
+func cleanupOutputs(outputs *outputReservations) {
+	if outputs == nil {
+		return
+	}
+	for _, output := range outputs.files {
 		if output == nil {
 			continue
 		}
@@ -163,6 +208,13 @@ func cleanupOutputs(outputs []*reservedOutput) {
 			if current, e := os.Lstat(output.file.Name()); e == nil && os.SameFile(output.info, current) {
 				os.Remove(output.file.Name())
 			}
+		}
+	}
+	for i := len(outputs.directories) - 1; i >= 0; i-- {
+		directory := outputs.directories[i]
+		if current, e := os.Lstat(directory.path); e == nil && os.SameFile(directory.info, current) {
+			// Remove only an empty directory, never recursively remove contents.
+			os.Remove(directory.path)
 		}
 	}
 }

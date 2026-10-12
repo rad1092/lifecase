@@ -155,12 +155,75 @@ func TestReservationCleanupPreservesWrittenOutput(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := outputs[0].write([]byte("evidence")); err != nil {
+	if err := outputs.files[0].write([]byte("evidence")); err != nil {
 		t.Fatal(err)
 	}
 	cleanupOutputs(outputs)
 	actual, err := os.ReadFile(path)
 	if err != nil || string(actual) != "evidence" {
 		t.Fatalf("report not retained: %q %v", actual, err)
+	}
+}
+
+func TestAncestorOutputFailureRemovesCreatedParents(t *testing.T) {
+	for _, reverse := range []bool{false, true} {
+		dir := t.TempDir()
+		parent := filepath.Join(dir, "report")
+		child := filepath.Join(parent, "nested", "child.json")
+		first, second := child, parent
+		if reverse {
+			first, second = second, first
+		}
+		var out, stderr bytes.Buffer
+		if code := run([]string{"run", "--fixture", "not-an-executable", "--json", first, "--junit", second}, &out, &stderr); code != 2 {
+			t.Fatalf("exit %d: %s", code, stderr.String())
+		}
+		if _, err := os.Lstat(parent); !os.IsNotExist(err) {
+			t.Fatalf("requested output left occupied: %v", err)
+		}
+		// The corrected retry can now use the originally requested filename.
+		outputs, err := reserveOutputs(parent)
+		if err != nil {
+			t.Fatalf("corrected retry refused: %v", err)
+		}
+		cleanupOutputs(outputs)
+	}
+}
+
+func TestAncestorAliasFailureRemovesCreatedParents(t *testing.T) {
+	dir := t.TempDir()
+	real, alias := filepath.Join(dir, "real"), filepath.Join(dir, "alias")
+	if err := os.Mkdir(real, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(real, alias); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	parent := filepath.Join(real, "report")
+	if _, err := reserveOutputs(filepath.Join(parent, "child.json"), filepath.Join(alias, "report")); err == nil {
+		t.Fatal("aliased ancestor accepted")
+	}
+	if _, err := os.Lstat(parent); !os.IsNotExist(err) {
+		t.Fatalf("aliased ancestor left occupied: %v", err)
+	}
+	if _, err := os.Stat(real); err != nil {
+		t.Fatalf("existing parent removed: %v", err)
+	}
+}
+
+func TestCleanupDoesNotRemoveNewContentsInOwnedParents(t *testing.T) {
+	parent := filepath.Join(t.TempDir(), "reports")
+	outputs, err := reserveOutputs(filepath.Join(parent, "unused.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	sentinel := filepath.Join(parent, "another-file")
+	if err := os.WriteFile(sentinel, []byte("keep"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	cleanupOutputs(outputs)
+	actual, err := os.ReadFile(sentinel)
+	if err != nil || string(actual) != "keep" {
+		t.Fatalf("other contents changed: %q %v", actual, err)
 	}
 }
