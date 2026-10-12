@@ -130,7 +130,8 @@ jobs:
           destination = Path('build/packages')
           destination.mkdir(parents=True, exist_ok=True)
           fixture = Path(os.environ['LIFECASE_FIXTURE'])
-          files = [(fixture, fixture.name), (Path('LICENSE'), 'LICENSE'), (Path('docs/protocol-v1.md'), 'protocol-v1.md')]
+          cli = Path('build/cli/lifecase' + os.environ['FIXTURE_SUFFIX'])
+          files = [(fixture, fixture.name), (cli, cli.name), (Path('LICENSE'), 'LICENSE'), (Path('docs/protocol-v1.md'), 'protocol-v1.md'), (Path('docs/release-quickstart.md'), 'README.md')]
           version = re.search(r'project\(lifecase VERSION ([0-9.]+)', Path('CMakeLists.txt').read_text()).group(1)
           manifest = ''.join(hashlib.sha256(path.read_bytes()).hexdigest() + '  ' + name + '\n' for path, name in files)
           archive = destination / ('lifecase-fixture-' + target + '.zip')
@@ -145,12 +146,27 @@ jobs:
               package.extractall(unpack)
           installed = (unpack / fixture.name).resolve()
           installed.chmod(0o755)
+          installed_cli = (unpack / cli.name).resolve()
+          installed_cli.chmod(0o755)
           assert hashlib.sha256(installed.read_bytes()).digest() == hashlib.sha256(fixture.read_bytes()).digest()
+          assert hashlib.sha256(installed_cli.read_bytes()).digest() == hashlib.sha256(cli.read_bytes()).digest()
           with open(os.environ['GITHUB_ENV'], 'a', encoding='utf-8') as env:
               env.write('LIFECASE_ARCHIVE_FIXTURE=' + str(installed) + '\n')
+              env.write('LIFECASE_ARCHIVE_CLI=' + str(installed_cli) + '\n')
           PY
       - name: Execute the extracted release archive
-        run: '"build/cli/lifecase${FIXTURE_SUFFIX}" run --fixture "$LIFECASE_ARCHIVE_FIXTURE" --json reports/archive-smoke.json --junit reports/archive-smoke.xml'
+        run: |
+          "$LIFECASE_ARCHIVE_CLI" run --fixture "$LIFECASE_ARCHIVE_FIXTURE" --json reports/archive-smoke.json --junit reports/archive-smoke.xml
+          python - <<'PY'
+          import hashlib, os, pathlib, subprocess
+          fixture = pathlib.Path(os.environ['LIFECASE_ARCHIVE_FIXTURE'])
+          before = hashlib.sha256(fixture.read_bytes()).hexdigest()
+          result = subprocess.run([os.environ['LIFECASE_ARCHIVE_CLI'], 'run', '--fixture', str(fixture), '--scenario', 'exit', '--json', str(fixture)], capture_output=True, timeout=30)
+          assert result.returncode == 2, result.returncode
+          assert hashlib.sha256(fixture.read_bytes()).hexdigest() == before
+          assert b'already exists' in result.stderr
+          print('PASS: extracted CLI refuses to overwrite fixture with report')
+          PY
       - name: Upload prebuilt fixture
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:

@@ -35,6 +35,18 @@ For a downloaded executable, set `LIFECASE_FIXTURE` to its absolute path instead
 
 Release targets are `linux-x64`, `macos-arm64`, and `windows-x64`, named `lifecase-fixture-TARGET.zip` with a SHA-256 sidecar. Verify the archive checksum before extracting it. Source builds on other configurations remain unverified until their tests run. The [release guide](docs/release-process.md) covers artifact contents and install checks. macOS binaries are not claimed to be signed or notarized; use a local source build if your download policy prevents execution.
 
+Starting with **v0.1.2**, each archive also includes the `lifecase` verifier
+(`lifecase.exe` on Windows). From the extracted directory on macOS/Linux:
+
+```sh
+./lifecase version
+./lifecase run --fixture ./lifecase-fixture --scenario exit --scenario flood --json reports/first.json --junit reports/first.xml
+```
+
+Expect `0.1.2`, exit `0`, and two passing results. On PowerShell use
+`.\lifecase.exe` and `.\lifecase-fixture.exe`. No Go or .NET is needed for this
+packaged verifier exercise; .NET 8 is required for the CliWrap contracts above.
+
 The [.NET guide](dotnet/README.md) describes the CliWrap 3.10.5 package integration, reusable test helpers, and individual contracts. Copy the relevant test policy into your application's integration suite, pin the fixture/package versions, and run on each platform you ship. `--logger trx` stores .NET test results; the optional Go verifier below produces JSON/JUnit.
 
 ## Explicit lifecycle policy
@@ -83,6 +95,19 @@ lifecase run --fixture ./build/lifecase-fixture --adapter ./my-runner-adapter --
 ```
 
 Use one `--adapter-arg` per argument. For a managed adapter you supply, use `--adapter dotnet --adapter-arg /absolute/path/to/Your.Adapter.dll`. The included CliWrap tests consume the fixture directly; they do not require this protocol. Adapter stdout is reserved for protocol messages. Adapters execute with your permissions and must be trusted.
+
+Starting with v0.1.2, JSON and JUnit output paths must be **new files**
+and different from each other. Existing files (including fixture executables and
+symlinks) are refused instead of overwritten. For repeated runs use a new report
+directory, such as `reports/run-2/go.json` and `reports/run-2/go.xml`. A report
+write error exits `2`; an earlier report may already have been written, so check
+the process exit code before considering both artifacts complete. The native
+fixture behavior and protocol v1 are unchanged.
+
+For the shortest first test, run only `--scenario exit --scenario flood`, then
+inspect `results[].status` and `results[].assertions` in the JSON. Both scenarios
+should pass; `flood` should count 262,144 bytes on **each** output stream. Then
+run the full suite before integrating the fixture into your application's CI.
 
 The [Go example](examples/go/main.go) shows `kit.Run(ctx, kit.Options{Fixture: path, Scenarios: names})`. A nil `Runner` selects the reference runner; set `Runner` to a `runner.Runner` implementation or `runner.External` to change it. Empty `Scenarios` runs the standard list. `StartupTimeout` defaults to one second and accepts 50–1,500 ms. Handle both the returned error and `Report.Failed()`. `Report.WriteJUnit` serializes JUnit. Reports keep stable scenario/assertion names and status strings; PIDs and elapsed measurements vary.
 

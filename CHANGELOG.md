@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.1.2 — 2026-10-12
+
+- Refuse existing report paths before starting scenarios and create reports exclusively. JSON/JUnit output can no longer truncate an existing report, a fixture executable, or a symlink target.
+- Reject identical JSON/JUnit paths before executing a fixture. Use fresh report filenames for repeat runs; report publication is not an atomic two-file transaction, and write errors remain exit 2.
+- Include the optional Go verifier executable in each native fixture archive, and execute that extracted verifier in the release gate. No Go installation is needed to try the packaged verifier.
+- Keep protocol v1 and native fixture behavior unchanged. Add report-preservation regression tests and first-run result guidance.
+
 ## 0.1.1 — 2026-10-08
 
 - Fix a watchdog lifetime defect: an exception unwound the run-local guard before writing a diagnostic, so a full inherited stderr pipe could block indefinitely in 0.1.0.
