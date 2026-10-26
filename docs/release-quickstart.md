@@ -18,6 +18,11 @@ Reports must be new, distinct files; choose another directory for each run.
 Exit `1` is a failed lifecycle assertion; exit `2` is invalid configuration or
 an execution/report error. Do not treat partially written reports as success.
 
+The `node/` and `python/` folders reproduce the inherited-pipe hang with Node's
+`child_process` and Python's `subprocess`, using only the standard library.
+Set `LIFECASE_FIXTURE` to the absolute path of the extracted fixture, then run
+`node --test` inside `node/` or `python python/test_subprocess.py`.
+
 To test your own application, use the
 [CliWrap integration guide](https://github.com/rad1092/lifecase/blob/v0.1.3/dotnet/README.md)
 or the included `protocol-v1.md`. The fixture is controlled synthetic input,

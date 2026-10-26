@@ -1,53 +1,81 @@
 # Lifecase
 
-**Small native fixtures for testing subprocess completion policies.**
+**Reproduce the CI step that prints its last line and never finishes.**
 
-Use a controlled child process to check what your application means by "finished": parent exit, actual stdout/stderr EOF, descendant cleanup, and graceful or forced shutdown. The first integration example targets .NET and the real CliWrap package. A Go verifier produces separate lifecycle assertions and JSON/JUnit evidence for fixture development or custom adapters.
+> **Lab project.** Lifecase is a small, tested experiment rather than a maintained product. The fixture and examples work and run in CI on Linux, macOS and Windows. Breadth beyond them waits for a real user with a concrete case.
 
-Lifecase is useful when your application adds its own cancellation or output policy and you want repeatable native inputs in its CI. CliWrap already has extensive lifecycle tests; this project does not replace those tests or its process implementation. [Research and fit](docs/research.md) explains the narrow use case, existing alternatives, and adoption uncertainty.
+A process your build starts can exit while something it started (a dev server, a file watcher, a compiler daemon) keeps stdout and stderr open. Then:
 
-[한국어 시작 가이드](docs/quickstart.ko.md) · [Protocol v1](docs/protocol-v1.md) · [Limits and capabilities](docs/limitations.md) · [.NET guide](dotnet/README.md)
+- Node's `child_process` fires `exit` but not `close`.
+- `execFile` callbacks and Python's `subprocess.run(capture_output=True)` wait for the pipes.
+- The job sits there until a timeout, or reports success with the output cut off.
 
-## Run the .NET contracts
+Lifecase is a native fixture that does exactly this on demand. Its parent exits at once while one descendant holds the pipes until you say stop. With it you can write the test that proves your runner handles the case, and keep it in CI.
 
-You need the .NET 8 SDK and a native `lifecase-fixture` executable for your OS/architecture. Use the matching asset from [Releases](https://github.com/rad1092/lifecase/releases), or build it from this checkout with CMake 3.16+ and a C++17 compiler:
+[한국어 시작 가이드](docs/quickstart.ko.md) · [Protocol v1](docs/protocol-v1.md) · [Limits and capabilities](docs/limitations.md) · [Research and fit](docs/research.md)
+
+## Is this for you?
+
+**Use it** if you maintain a build runner, test executor, dev tool or job worker that starts processes and decides when they are "done", and you want a repeatable inherited-pipe, blocked-stdin or forced-shutdown case in its CI.
+
+**Skip it** in these cases:
+- A fake process is enough for your tests (for example [pytest-subprocess](https://pytest-subprocess.readthedocs.io/en/latest/)).
+- Your process library's own tests already cover your policy.
+- You need production process supervision.
+
+## Try it with Node or Python
+
+The examples use only the standard library: no npm or pip install. You need the native fixture. Take `lifecase-fixture-TARGET.zip` from [Releases](https://github.com/rad1092/lifecase/releases) (verify its `.sha256` sidecar first), or build it with CMake 3.16+ and a C++17 compiler:
 
 ```sh
-cmake -S . -B build
-cmake --build build --config Release
+git clone https://github.com/rad1092/lifecase && cd lifecase
+cmake -S . -B build && cmake --build build --config Release
+export LIFECASE_FIXTURE="$PWD/build/lifecase-fixture"
+
+node examples/node/hang-demo.mjs
+(cd examples/node && node --test)
+python3 examples/python/test_subprocess.py
 ```
 
-From the repository root on macOS/Linux:
+The demo is a CI step in miniature. The tool exits at once, but Node cannot end until the descendant lets go of the pipes (here, its 5 second watchdog):
+
+```text
+   27 ms  tool exited with 0; the step looks finished
+ 5016 ms  pipes closed; only now can Node exit
+ 5016 ms  node process ends
+```
+
+What the example tests pin down, so a runtime or library upgrade that changes them fails your build:
+
+| Example | What it shows |
+| --- | --- |
+| Node `exit` vs `close` | `exit` fires at once; `close` waits until the descendant releases the pipes. |
+| Node `execFile` | The callback waits for the descendant, not for the process you started. |
+| Node `execFile` with `timeout` | When the timeout fires, Node closes the pipes and reports **success** (`error === null`) for a process that exited long before. |
+| Python `poll()` vs `communicate()` | `poll()` reports exit code 0 while `communicate()` still waits. |
+| Python `run(timeout=...)` | Raises `TimeoutExpired` for a process that exited with 0. On Windows it also waits for the descendant before raising. |
+| Bounded policy (POSIX) | Drain briefly after exit, then end the process group or session. `close` arrives within the grace period. |
+
+Copy the policy your tool actually wants into its own test suite, pin the fixture version, and run it on each platform you ship. On Windows, set `LIFECASE_FIXTURE` to `lifecase-fixture.exe`. The process-group tests are skipped there.
+
+Each release archive also includes the `lifecase` verifier (`lifecase.exe` on Windows), which runs the full scenario list and writes JSON/JUnit evidence without Go or .NET:
+
+```sh
+./lifecase run --fixture ./lifecase-fixture --scenario exit --scenario flood --json reports/first.json --junit reports/first.xml
+```
+
+Release targets are `linux-x64`, `macos-arm64` and `windows-x64`. The [release guide](docs/release-process.md) covers artifact contents and install checks. macOS binaries are not claimed to be signed or notarized; use a local source build if your download policy prevents execution.
+
+## .NET (CliWrap) contracts
+
+The [.NET guide](dotnet/README.md) runs the same fixture against the real CliWrap 3.10.5 package with reusable test helpers. CliWrap already has extensive lifecycle tests of its own; this example is for teams that wrap CliWrap with their own cancellation or output policy. You need the .NET 8 SDK:
 
 ```sh
 export LIFECASE_FIXTURE="$PWD/build/lifecase-fixture"
 dotnet test dotnet/tests/Lifecase.CliWrap.Tests -c Release --logger trx
 ```
 
-For a Visual Studio build on Windows, use PowerShell:
-
-```powershell
-$env:LIFECASE_FIXTURE = (Resolve-Path ./build/Release/lifecase-fixture.exe).Path
-dotnet test dotnet/tests/Lifecase.CliWrap.Tests -c Release --logger trx
-```
-
-For a downloaded executable, set `LIFECASE_FIXTURE` to its absolute path instead. Other CMake generators may place the binary in a different build subdirectory. The native executable and .NET contracts are enough for this workflow; Go is optional.
-
-Release targets are `linux-x64`, `macos-arm64`, and `windows-x64`, named `lifecase-fixture-TARGET.zip` with a SHA-256 sidecar. Verify the archive checksum before extracting it. Source builds on other configurations remain unverified until their tests run. The [release guide](docs/release-process.md) covers artifact contents and install checks. macOS binaries are not claimed to be signed or notarized; use a local source build if your download policy prevents execution.
-
-Starting with **v0.1.2**, each archive also includes the `lifecase` verifier
-(`lifecase.exe` on Windows). From the extracted directory on macOS/Linux:
-
-```sh
-./lifecase version
-./lifecase run --fixture ./lifecase-fixture --scenario exit --scenario flood --json reports/first.json --junit reports/first.xml
-```
-
-Expect `0.1.3`, exit `0`, and two passing results. On PowerShell use
-`.\lifecase.exe` and `.\lifecase-fixture.exe`. No Go or .NET is needed for this
-packaged verifier exercise; .NET 8 is required for the CliWrap contracts above.
-
-The [.NET guide](dotnet/README.md) describes the CliWrap 3.10.5 package integration, reusable test helpers, and individual contracts. Copy the relevant test policy into your application's integration suite, pin the fixture/package versions, and run on each platform you ship. `--logger trx` stores .NET test results; the optional Go verifier below produces JSON/JUnit.
+For a Visual Studio build on Windows, use `$env:LIFECASE_FIXTURE = (Resolve-Path ./build/Release/lifecase-fixture.exe).Path` in PowerShell.
 
 ## Explicit lifecycle policy
 

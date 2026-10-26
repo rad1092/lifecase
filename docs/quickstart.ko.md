@@ -1,12 +1,41 @@
 # Lifecase 빠른 시작
 
-Lifecase는 subprocess 완료·취소 정책을 검사하기 위한 작은 네이티브 fixture 모음입니다. 첫 통합 예제는 .NET과 실제 CliWrap 패키지를 사용합니다. 부모 종료, stdout/stderr의 실제 EOF, 자손 정리, 정상·강제 종료를 구분해 애플리케이션의 정책을 검사할 때 사용하세요.
+**CI 단계가 마지막 줄을 찍고 끝나지 않는 문제를 재현하는 도구입니다.** 아직 실험실 단계의 프로젝트입니다.
 
-CliWrap 자체에도 충분한 수명주기 테스트가 있습니다. 기존 테스트가 요구를 충족한다면 이 도구를 추가할 필요가 없습니다. Lifecase의 도입 이유와 비용은 [조사 문서](research.md)에 정리했습니다.
+빌드가 실행한 프로세스는 이미 끝났는데, 그 프로세스가 띄운 개발 서버, 파일 감시기, 컴파일러 데몬 같은 자손이 stdout/stderr를 계속 잡고 있을 수 있습니다. 그러면 이런 일이 생깁니다.
 
-## .NET 검사부터 실행하기
+- Node `child_process`에서는 `exit`는 오지만 `close`는 오지 않습니다.
+- `execFile` 콜백과 Python `subprocess.run(capture_output=True)`는 파이프가 닫힐 때까지 기다립니다.
+- 작업은 타임아웃까지 멈춰 있거나, 출력이 잘린 채 성공으로 보고됩니다.
 
-.NET 8 SDK와 운영체제·아키텍처에 맞는 `lifecase-fixture`가 필요합니다. [Releases](https://github.com/rad1092/lifecase/releases)의 fixture를 받거나 CMake 3.16 이상과 C++17 컴파일러로 직접 빌드하세요.
+Lifecase의 네이티브 fixture는 이 상황을 그대로 만들어 줍니다. 부모는 바로 끝나고 자손 하나가 stop 신호를 받을 때까지 파이프를 잡고 있습니다.
+
+빌드 러너, 테스트 실행기, 개발 도구, 작업 워커처럼 프로세스를 띄우고 "끝났다"를 판단하는 코드를 관리한다면 사용하세요. 가짜 프로세스로 충분하거나, 사용하는 라이브러리 자체 테스트로 충분하거나, 운영 환경용 프로세스 감독이 필요하다면 맞지 않습니다.
+
+## Node·Python으로 먼저 실행하기
+
+예제는 표준 라이브러리만 쓰므로 npm이나 pip 설치가 필요 없습니다. fixture는 [Releases](https://github.com/rad1092/lifecase/releases)에서 받거나(먼저 `.sha256` 체크섬 확인) CMake로 빌드합니다.
+
+```sh
+cmake -S . -B build && cmake --build build --config Release
+export LIFECASE_FIXTURE="$PWD/build/lifecase-fixture"
+node examples/node/hang-demo.mjs
+(cd examples/node && node --test)
+python3 examples/python/test_subprocess.py
+```
+
+`hang-demo.mjs`를 실행하면 도구는 27ms 만에 끝나지만 Node 프로세스는 자손의 5초 감시 타이머가 끝날 때까지 종료되지 않습니다. 테스트는 다음을 고정합니다.
+
+- `exit`와 `close`의 차이
+- `execFile`이 자손을 기다린다는 점
+- `timeout`이 발동하면 이미 끝난 프로세스를 **성공**으로 보고한다는 점
+- Python `poll()`과 `communicate()`의 차이
+- `run(timeout=...)`이 종료 코드 0인 프로세스에 `TimeoutExpired`를 낸다는 점
+- 짧은 대기 후 프로세스 그룹을 끝내는 정책(POSIX 전용)
+
+## .NET(CliWrap) 검사 실행하기
+
+CliWrap을 감싸 자체 취소·출력 정책을 만든 팀을 위한 예제입니다. CliWrap 자체에도 충분한 수명주기 테스트가 있습니다. .NET 8 SDK와 운영체제·아키텍처에 맞는 `lifecase-fixture`가 필요합니다. [Releases](https://github.com/rad1092/lifecase/releases)의 fixture를 받거나 CMake 3.16 이상과 C++17 컴파일러로 직접 빌드하세요.
 
 ```sh
 cmake -S . -B build

@@ -89,6 +89,12 @@ jobs:
         run: |
           python fixture/tests.py "$LIFECASE_FIXTURE"
           python fixture/tests.py "$LIFECASE_FIXTURE"
+      - name: Node and Python integration examples
+        working-directory: examples/node
+        run: |
+          node --version
+          node --test
+          python ../python/test_subprocess.py
       - name: Go tests and static checks
         run: |
           go test -count=1 -timeout=120s ./...
@@ -132,6 +138,8 @@ jobs:
           fixture = Path(os.environ['LIFECASE_FIXTURE'])
           cli = Path('build/cli/lifecase' + os.environ['FIXTURE_SUFFIX'])
           files = [(fixture, fixture.name), (cli, cli.name), (Path('LICENSE'), 'LICENSE'), (Path('docs/protocol-v1.md'), 'protocol-v1.md'), (Path('docs/release-quickstart.md'), 'README.md')]
+          examples = sorted(Path('examples/node').glob('*.*')) + [Path('examples/python/test_subprocess.py')]
+          files += [(path, path.relative_to('examples').as_posix()) for path in examples]
           version = re.search(r'project\(lifecase VERSION ([0-9.]+)', Path('CMakeLists.txt').read_text()).group(1)
           manifest = ''.join(hashlib.sha256(path.read_bytes()).hexdigest() + '  ' + name + '\n' for path, name in files)
           archive = destination / ('lifecase-fixture-' + target + '.zip')

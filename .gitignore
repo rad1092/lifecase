@@ -7,3 +7,5 @@ reports/
 .DS_Store
 **/TestResults/
 dotnet/results/
+__pycache__/
+node_modules/

@@ -20,7 +20,7 @@ The need follows from these documented distinctions: authors of build runners, t
 
 | Tool | Existing responsibility | Relationship to Lifecase |
 | --- | --- | --- |
-| [CliWrap](https://github.com/Tyrrrz/CliWrap) | A .NET command library with async piping, cancellation, ownership of process lifetime, and tests on Windows/Linux/macOS. | The first package integration example. Its substantial existing tests make a second generic .NET process wrapper difficult to justify. |
+| [CliWrap](https://github.com/Tyrrrz/CliWrap) | A .NET command library with async piping, cancellation, ownership of process lifetime, and tests on Windows/Linux/macOS. | The .NET integration example. Its substantial existing tests make a second generic .NET process wrapper difficult to justify, which is why the Node and Python examples now come first. |
 | [process-wrap](https://docs.rs/process-wrap/latest/process_wrap/) | Composable wrappers around Rust `Command` for std/Tokio, including Unix groups/sessions and Windows Job Objects. | An implementation a user can test through an adapter. Lifecase does not replace its wrappers or claim superior process control. |
 | [Watchexec](https://github.com/watchexec/watchexec/blob/main/doc/watchexec.1.md) | Execute/restart commands on events; configure stop signals, timeout, and group/session/Job Object wrapping. | Provides supervision policy. Lifecase supplies controlled fixtures and assertions for evaluating such policies. |
 | [libuv process API](https://docs.libuv.org/en/v1.x/process.html) | Spawn processes, configure stdio inheritance, receive exit callbacks, and signal process handles. | Supplies runtime building blocks. An adapter can translate their observations into the shared contract. |
@@ -36,7 +36,7 @@ CliWrap [3.10.4](https://github.com/Tyrrrz/CliWrap/releases/tag/3.10.4) shipped 
 
 ## Narrow product decision and install reason
 
-The public asset is a small controlled native fixture with a .NET/CliWrap integration example and an explicit lifecycle policy. Go remains the kit's optional developer verifier and report generator. The example uses the real CliWrap NuGet package, with reusable fixture and bounded-capture test helpers rather than a new process wrapper.
+The public asset is a small controlled native fixture with Node `child_process` and Python `subprocess` examples, a .NET/CliWrap integration example, and an explicit lifecycle policy. Node and Python come first because their standard libraries expose the inherited-pipe hang directly: `exit` without `close`, an `execFile` timeout that reports success, and `subprocess.run(timeout=...)` failing a process that exited with 0. CliWrap already tests these contracts well. Go remains the kit's optional developer verifier and report generator. The example uses the real CliWrap NuGet package, with reusable fixture and bounded-capture test helpers rather than a new process wrapper.
 
 The plausible installation reason is specific: a team has its own completion/cancellation policy around a pinned process library, needs an inherited-pipe or blocked-I/O case in its application CI, and wants to reuse the same bounded native input without copying another project's entire dummy-program test infrastructure. The fixture's ready/stop side channel lets the test coordinate a descendant independently of the parent's exit. This is a hypothesis about integration convenience, not evidence of external adoption.
 
