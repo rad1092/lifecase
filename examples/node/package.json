@@ -1,0 +1,13 @@
+{
+  "name": "lifecase-node-example",
+  "private": true,
+  "description": "Reproduce the Node child_process hang where an inherited pipe outlives the process you started.",
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "test": "node --test",
+    "demo": "node hang-demo.mjs"
+  }
+}

@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- First integration examples for Node `child_process` and Python `subprocess`, standard library only: `exit` versus `close`, `execFile` with and without `timeout`, `poll()` versus `communicate()`, `run(timeout=...)`, and a bounded process-group policy. `examples/node/hang-demo.mjs` shows a CI step that cannot finish. CI runs both on all three platforms, and release archives include them.
+- README leads with the CI-hang reproduction, says who should use or skip Lifecase, and marks it as a lab project. The CliWrap contracts remain as the .NET example.
+
 ## 0.1.3 — 2026-10-12
 
 - Reserve all output files before launching a fixture, using destination filesystem rules to reject symlink-parent and case aliases. A collision removes empty reservations without leaving partial evidence. Existing files are still never overwritten.
